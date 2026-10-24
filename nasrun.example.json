@@ -1,0 +1,17 @@
+{
+  "default_host": "nas",
+  "hosts": {
+    "nas": {
+      "hostname": "192.168.0.10",
+      "port": 22,
+      "username": "admin",
+      "key_file": "",
+      "confirm": "sudo",
+      "auto_approve": [
+        "^docker (ps|images|logs|inspect|stats --no-stream)\\b",
+        "^(ls|cat|df|du|whoami|id|uptime|free|ps|top -bn1)\\b"
+      ],
+      "confirm_timeout_sec": 120
+    }
+  }
+}

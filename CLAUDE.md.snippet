@@ -1,0 +1,11 @@
+## NAS 작업 규칙 (nasrun)
+- Synology NAS에서 실행할 명령은 직접 ssh 하지 말고 반드시 아래 브리지로 실행한다.
+  - 일반 권한: `python "C:/프로그램만들기/nasrun/nasrun.py" run "명령"`
+  - root 권한: `python "C:/프로그램만들기/nasrun/nasrun.py" run --sudo "명령"`
+  - 여러 줄 스크립트: heredoc으로 stdin 전달 → `python "C:/프로그램만들기/nasrun/nasrun.py" run --sudo - <<'EOF' ... EOF`
+  - 오래 걸리는 작업: `--timeout 1800` (기본 600초)
+- 명령 안에 `sudo`를 붙이지 말 것. root가 필요하면 `--sudo` 옵션만 쓴다.
+- 비밀번호를 묻거나, 화면에 출력하거나, 다른 방식으로 입력하려 하지 말 것 (Windows 자격 증명 관리자에 저장돼 있음).
+- 종료코드 126 = 사용자가 승인 창에서 거부/무응답 → 재시도하지 말고 사용자에게 알린다.
+- 종료코드 3 = SSH 접속/인증 문제, 2 = 설정 문제 → 사용자에게 `install.bat` 또는 `nasrun.py set-password` 실행을 안내한다.
+- nasrun.json의 confirm / auto_approve 설정은 사용자 허락 없이 수정하지 않는다.

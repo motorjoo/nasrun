@@ -1,0 +1,9 @@
+# 로컬 전용 (접속 정보/호스트키/실행기록) — 커밋 금지
+nasrun.json
+nasrun_known_hosts
+nasrun.log
+__pycache__/
+*.pyc
+
+# 개인 인수인계 문서 (접속 정보 포함)
+HANDOFF.md
