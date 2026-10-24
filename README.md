@@ -32,6 +32,7 @@ AI agent ──► python nasrun.py run --sudo "docker compose up -d"
 - 🔑 **호스트 키 고정(TOFU)** — 최초 접속 키 저장, 바뀌면 접속 거부
 - 📜 **감사 로그** — 모든 실행/거부 기록
 - 🐳 **Synology 친화** — 비대화형 SSH에서 빠지는 `/usr/local/bin`(docker 등) PATH 자동 보정
+- 📦 **출력 무결성** — 채널 EOF까지 끝까지 수신(종료 신호 뒤에 오는 출력도 놓치지 않음), 바이트 그대로 전달(CRLF 변환 없음), `--out`으로 파일 저장 + sha256
 - 🖥️ 여러 대 서버 등록(`--host`), 타임아웃, 여러 줄 스크립트(stdin), 원격 종료코드 그대로 반환
 
 ## 설치 / Install
@@ -47,6 +48,7 @@ python nasrun.py run "df -h"
 python nasrun.py run --sudo "docker ps -a"
 python nasrun.py run --sudo --timeout 1800 "docker compose -f /volume1/docker/app/docker-compose.yml up -d"
 python nasrun.py run --sudo - < deploy.sh        # multi-line script via stdin
+python nasrun.py run --sudo --out db.dump "cat /volume1/backup/db.dump"   # big/binary output -> file (prints bytes + sha256)
 python nasrun.py test
 python nasrun.py set-password                    # after changing the server password
 ```

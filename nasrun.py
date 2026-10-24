@@ -15,6 +15,7 @@ Claude Code가 NAS 명령을 직접 실행하고 결과(stdout/stderr/종료코�
   python nasrun.py run "df -h"
   python nasrun.py run --sudo "docker ps"
   python nasrun.py run --sudo - < script.sh    # 여러 줄 스크립트는 stdin으로
+  python nasrun.py run --sudo --out db.sql.gz "pg_dump ... | gzip"   # 백업은 파일로 바로
 """
 import argparse
 import datetime
@@ -156,7 +157,11 @@ def ask_approval(h, cmd, sudo):
 
     root.title("nasrun — NAS 명령 승인")
     root.attributes("-topmost", True)
-    root.geometry("720x380")
+    # 주 모니터 정중앙에 띄운다(사용자 요청 2026-10-24).
+    w, hgt = 720, 380
+    x = max(0, (root.winfo_screenwidth() - w) // 2)
+    y = max(0, (root.winfo_screenheight() - hgt) // 2)
+    root.geometry(f"{w}x{hgt}+{x}+{y}")
     tag = "sudo (root 권한)" if sudo else "일반 사용자"
     tk.Label(root, text=f"대상: {h['username']}@{h['hostname']}   권한: {tag}",
              font=("Malgun Gothic", 11, "bold"), fg="#b00020" if sudo else "#000").pack(anchor="w", padx=12, pady=(12, 4))
@@ -246,7 +251,12 @@ def build_remote(cmd, sudo):
     return f"PATH={REMOTE_PATH}; export PATH; exec </dev/null; sh -c {shlex.quote(cmd)}"
 
 
-def run_remote(client, remote, stdin_data, timeout, secret):
+def run_remote(client, remote, stdin_data, timeout, secret, out_path=None):
+    """원격 실행. stdout/stderr 를 '바이트 그대로' 전달하고, 채널 EOF 까지 끝까지 읽는다.
+
+    주의: sshd 는 exit-status 를 남은 출력보다 먼저 보낼 수 있다(지연 큰 회선에서 흔함).
+    exit_status_ready() 로 루프를 끝내면 출력 끝부분이 잘린다 → 반드시 EOF 기준으로 종료.
+    """
     chan = client.get_transport().open_session()
     chan.settimeout(1.0)
     chan.exec_command(remote)
@@ -254,50 +264,92 @@ def run_remote(client, remote, stdin_data, timeout, secret):
         chan.sendall(stdin_data.encode("utf-8"))
     chan.shutdown_write()
 
-    out_dec = _Dec()
-    err_dec = _Dec()
+    out_fh = open(out_path, "wb") if out_path else None
+    import hashlib
+    sha = hashlib.sha256()
+    # --out 파일은 원본 그대로(마스킹 안 함), 화면 출력만 마스킹
+    out_sink = _Sink(out_fh, None, sha) if out_fh else _Sink(_bin(sys.stdout), secret, None)
+    err_sink = _Sink(_bin(sys.stderr), secret, None)
     start = time.time()
+    rc = None
+    try:
+        while True:
+            got = False
+            while chan.recv_ready():
+                out_sink.write(chan.recv(1 << 20))
+                got = True
+            while chan.recv_stderr_ready():
+                err_sink.write(chan.recv_stderr(1 << 20))
+                got = True
+            if (chan.eof_received or chan.closed) and not chan.recv_ready() and not chan.recv_stderr_ready():
+                break
+            if timeout and time.time() - start > timeout:
+                chan.close()
+                err_sink.write(f"\n[nasrun] 시간 초과({timeout}s) — 원격 명령을 끊었습니다.\n".encode("utf-8"))
+                rc = 124
+                break
+            if not got:
+                time.sleep(0.02)
+        if rc is None:
+            # EOF 이후 exit-status 가 늦게 올 수 있음 → 잠시 대기
+            deadline = time.time() + 30
+            while not chan.exit_status_ready() and time.time() < deadline:
+                time.sleep(0.02)
+            rc = chan.recv_exit_status() if chan.exit_status_ready() else 255
+    finally:
+        out_sink.flush()
+        err_sink.flush()
+        if out_fh:
+            out_fh.close()
+    if out_path:
+        print(f"[nasrun] saved {out_sink.count} bytes -> {out_path}  sha256={sha.hexdigest()}", file=sys.stderr)
+    return rc
 
-    def emit(stream, text):
-        if not text:
+
+def _bin(stream):
+    """텍스트 변환/CRLF 치환 없이 쓰는 바이너리 스트림."""
+    stream.flush()
+    return getattr(stream, "buffer", stream)
+
+
+class _Sink:
+    """바이트 그대로 출력. secret 이 청크 경계에 걸쳐도 마스킹되도록 꼬리 버퍼 유지."""
+    def __init__(self, fh, secret, sha):
+        self.fh = fh
+        self.sec = secret.encode("utf-8") if secret else b""
+        self.keep = max(len(self.sec) - 1, 0)
+        self.buf = b""
+        self.sha = sha
+        self.count = 0
+
+    def _emit(self, data):
+        if not data:
             return
-        if secret:
-            text = text.replace(secret, "****")
-        stream.write(text)
-        stream.flush()
+        self.fh.write(data)
+        self.count += len(data)
+        if self.sha:
+            self.sha.update(data)
 
-    while True:
-        got = False
-        if chan.recv_ready():
-            emit(sys.stdout, out_dec.feed(chan.recv(65536)))
-            got = True
-        if chan.recv_stderr_ready():
-            emit(sys.stderr, err_dec.feed(chan.recv_stderr(65536)))
-            got = True
-        if chan.exit_status_ready() and not chan.recv_ready() and not chan.recv_stderr_ready():
-            break
-        if timeout and time.time() - start > timeout:
-            chan.close()
-            emit(sys.stderr, f"\n[nasrun] 시간 초과({timeout}s) — 원격 명령을 끊었습니다.\n")
-            return 124
-        if not got:
-            time.sleep(0.05)
-    emit(sys.stdout, out_dec.flush())
-    emit(sys.stderr, err_dec.flush())
-    return chan.recv_exit_status()
-
-
-class _Dec:
-    """UTF-8 멀티바이트가 청크 경계에서 잘려도 깨지지 않게."""
-    def __init__(self):
-        import codecs
-        self.d = codecs.getincrementaldecoder("utf-8")(errors="replace")
-
-    def feed(self, b):
-        return self.d.decode(b)
+    def write(self, data):
+        if not data:
+            return
+        if not self.sec:
+            self._emit(data)
+            return
+        self.buf = (self.buf + data).replace(self.sec, b"****")
+        if len(self.buf) > self.keep:
+            cut = len(self.buf) - self.keep
+            self._emit(self.buf[:cut])
+            self.buf = self.buf[cut:]
 
     def flush(self):
-        return self.d.decode(b"", final=True)
+        if self.buf:
+            self._emit(self.buf.replace(self.sec, b"****") if self.sec else self.buf)
+            self.buf = b""
+        try:
+            self.fh.flush()
+        except Exception:
+            pass
 
 
 # ───────────────────────── 명령 ─────────────────────────
@@ -361,7 +413,7 @@ def cmd_run(args):
     client = connect(h, pw)
     try:
         rc = run_remote(client, build_remote(command, args.sudo),
-                        (pw + "\n") if args.sudo else None, args.timeout, pw)
+                        (pw + "\n") if args.sudo else None, args.timeout, pw, args.out)
     finally:
         client.close()
     log(h, command, args.sudo, f"rc={rc}", pw)
@@ -390,6 +442,7 @@ def main():
     s.add_argument("--host")
     s.add_argument("--sudo", action="store_true", help="root 권한으로 실행")
     s.add_argument("--timeout", type=int, default=600, help="초 (기본 600, 0=무제한)")
+    s.add_argument("--out", help="stdout 을 이 파일에 원본 그대로 저장(백업/바이너리용), 바이트수·sha256 출력")
     s.add_argument("command", nargs=argparse.REMAINDER, help="명령 문자열, '-' 이면 stdin")
     s.set_defaults(func=cmd_run)
 
