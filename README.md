@@ -27,6 +27,7 @@ AI agent ──► python nasrun.py run --sudo "docker compose up -d"
 
 ## 특징 / Features
 - 🔐 **비밀번호 비노출** — OS 키체인에 저장, 명령줄·로그·AI 컨텍스트 어디에도 안 나옴. 출력에 섞여도 `****` 마스킹
+- ⏱️ **일괄 승인** — 승인 창의 [일괄 승인(15/30/60/120분)]을 한 번 누르면 그 시간 동안 이후 sudo 명령은 창 없이 실행 (배포처럼 명령이 연달아 나올 때). 비밀번호 키로 HMAC 서명 → 파일 위조·연장 불가, 생성 CLI 없음(사람 클릭으로만). `revoke`로 즉시 해제, `status`로 남은 시간 확인
 - ✅ **사람 승인** — sudo 명령은 데스크톱 승인 창. 조회 명령(`docker ps`, `ls`, `df` …)은 정규식 화이트리스트로 자동 통과. `; | & $ \` < >`나 줄바꿈이 섞이면 무조건 승인 창
 - 🧱 **안전한 sudo 처리** — `sudo -k`로 매번 재인증, 실행 명령의 stdin은 `/dev/null`로 차단(비밀번호를 읽을 수 없음)
 - 🔑 **호스트 키 고정(TOFU)** — 최초 접속 키 저장, 바뀌면 접속 거부
@@ -50,6 +51,8 @@ python nasrun.py run --sudo --timeout 1800 "docker compose -f /volume1/docker/ap
 python nasrun.py run --sudo - < deploy.sh        # multi-line script via stdin
 python nasrun.py run --sudo --out db.dump "cat /volume1/backup/db.dump"   # big/binary output -> file (prints bytes + sha256)
 python nasrun.py test
+python nasrun.py status                          # batch-approval time left
+python nasrun.py revoke                          # end batch approval now
 python nasrun.py set-password                    # after changing the server password
 ```
 
@@ -75,7 +78,7 @@ python nasrun.py set-password                    # after changing the server pas
 예시: `nasrun.example.json`
 
 ## 종료코드 / Exit codes
-원격 명령 rc 그대로 · `2` config · `3` SSH/auth/host-key · `124` timeout · `126` denied by user
+원격 명령 rc 그대로 (접속 일시 실패·로그인 지연은 1회 자동 재시도) · `2` config · `3` SSH/auth/host-key · `124` timeout · `126` denied by user
 
 ## 보안 메모 / Security notes
 - 승인 창을 끄면(`confirm: never`) AI가 root 명령을 자유롭게 실행할 수 있습니다. 화이트리스트는 좁게 유지하세요.
